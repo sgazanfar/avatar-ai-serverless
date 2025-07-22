@@ -1,0 +1,69 @@
+# src/docker/Dockerfile.backend - Production-ready backend container
+
+FROM nvidia/cuda:12.1-runtime-ubuntu22.04
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-pip \
+    python3.11-dev \
+    python3.11-venv \
+    ffmpeg \
+    libsndfile1 \
+    portaudio19-dev \
+    build-essential \
+    curl \
+    git \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create symbolic links for Python
+RUN ln -s /usr/bin/python3.11 /usr/bin/python
+RUN ln -s /usr/bin/pip3.11 /usr/bin/pip
+
+# Create app user for security
+RUN useradd --create-home --shell /bin/bash app
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements first (for better caching)
+COPY backend/requirements.txt .
+
+# Upgrade pip and install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Create necessary directories
+RUN mkdir -p /app/logs /app/temp /app/models
+RUN chown -R app:app /app
+
+# Copy application code
+COPY backend/ .
+
+# Change ownership of application files
+RUN chown -R app:app /app
+
+# Switch to app user
+USER app
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Expose ports
+EXPOSE 8000 8080
+
+# Set default environment variables
+ENV HOST=0.0.0.0
+ENV PORT=8000
+ENV WORKERS=1
+ENV DEBUG=False
+
+# Use gunicorn for production with uvicorn workers
+CMD ["sh", "-c", "gunicorn main:app -w ${WORKERS} -k uvicorn.workers.UvicornWorker --bind ${HOST}:${PORT} --timeout 120 --keep-alive 5 --access-logfile - --error-logfile -"]
